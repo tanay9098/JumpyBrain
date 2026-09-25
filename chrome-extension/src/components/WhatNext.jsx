@@ -49,16 +49,38 @@ export default function WhatNext({ taskRevision = 0 }) {
     load(e)
   }
 
+  async function logRecommendation(type, taskId) {
+    try {
+      await api.post('/recommendation-events', {
+        type,
+        taskId,
+        energyLevel: energy,
+        wasRecommended: true,
+      })
+    } catch {}
+  }
+
   async function completeTask() {
     if (!task) return
     setCompleting(true)
     try {
-      await api.put(`/tasks/${task._id}/complete`)
+      await api.put(`/tasks/${task._id}/complete`, { energyLevel: energy })
       setTask(null)
       load()
     } catch {
       setCompleting(false)
     }
+  }
+
+  async function startTask() {
+    if (!task) return
+    await logRecommendation('started', task._id)
+  }
+
+  async function skipTask() {
+    if (!task) return
+    await logRecommendation('skipped', task._id)
+    load()
   }
 
   function fmtDue(iso) {
@@ -122,10 +144,13 @@ export default function WhatNext({ taskRevision = 0 }) {
           {reason && <div className="task-reason">💡 {reason}</div>}
 
           <div className="task-actions">
+            <button className="btn btn-primary btn-sm" onClick={startTask}>
+              Start
+            </button>
             <button className="btn btn-primary btn-sm" onClick={completeTask} disabled={completing}>
               {completing ? '…' : '✓ Done'}
             </button>
-            <button className="btn btn-ghost btn-sm" onClick={() => load()}>
+            <button className="btn btn-ghost btn-sm" onClick={skipTask}>
               ↺ Next
             </button>
           </div>

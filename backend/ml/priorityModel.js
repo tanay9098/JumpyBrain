@@ -117,4 +117,29 @@ function predictPriority(f) {
   };
 }
 
-module.exports = { predictPriority, getTaskCategory, getCategoryEnergyMatch };
+function rankTasks(tasks, {
+  energyLevel = 3,
+  completionRate = 0.5,
+  procrastinationRate = 0.3,
+} = {}) {
+  const ranked = (tasks || []).map((task) => {
+    const deadlineDays = task.dueAt
+      ? (new Date(task.dueAt) - new Date()) / (1000 * 60 * 60 * 24)
+      : 30;
+    const result = predictPriority({
+      completion_rate: completionRate,
+      deadline_days: Math.max(deadlineDays, 0),
+      estimated_time: task.estimateMins || 30,
+      urgency_self: task.importance || 1,
+      historical_procrastination_rate: procrastinationRate,
+      energy_level: energyLevel,
+      dread_score: task.dreadScore || 3,
+      title: task.title,
+    });
+    return { task, ...result };
+  });
+  ranked.sort((a, b) => b.score - a.score);
+  return ranked;
+}
+
+module.exports = { predictPriority, getTaskCategory, getCategoryEnergyMatch, rankTasks };

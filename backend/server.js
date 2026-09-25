@@ -17,6 +17,7 @@ const pushRoutes = require('./routes/push');
 const statsRoutes = require('./routes/stats');
 const priorityRoutes = require('./routes/priority');
 const recommendationsRoutes = require('./routes/recommendations');
+const recommendationEventRoutes = require('./routes/recommendationEvents');
 const habitsRoutes = require('./routes/habits');
 const aiRoutes = require('./routes/ai');
 const integrationsRoutes = require('./routes/integrations');
@@ -102,6 +103,7 @@ app.use('/api/stats', statsRoutes);
 
 app.use('/api/priority', priorityRoutes);
 app.use('/api/recommendations', recommendationsRoutes);
+app.use('/api/recommendation-events', recommendationEventRoutes);
 app.use('/api/habits', habitsRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/integrations', integrationsRoutes);

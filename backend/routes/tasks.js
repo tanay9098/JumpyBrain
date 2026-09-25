@@ -17,8 +17,8 @@ const aiLimiter = rateLimit({
 });
 
 
-// ✅ Local ML
-const { predictPriority } = require('../ml/priorityModel');
+const { rankTasks } = require('../ml/priorityModel');
+const { historyRates, logShown, logTaskOutcome } = require('../services/recommendationLog');
 
 // ─── AUTH MIDDLEWARE ────────────────────────────────────────────────
 function auth(req, res, next) {
@@ -41,39 +41,29 @@ function isValidObjectId(id) {
 
 // ─── LIST TASKS ─────────────────────────────────────────────────────
 router.get('/', auth, async (req, res) => {
-  const tasks = await Task.find({ userId: req.userId }).sort({ dueAt: 1 });
-  res.json({ tasks });
+  const tasks = await Task.find({ userId: req.userId }).sort({ dueAt: 1 }).lean();
+  const energyLevel = parseInt(req.query.energyLevel, 10);
+  if (!Number.isFinite(energyLevel)) {
+    return res.json({ tasks });
+  }
+
+  const open = tasks.filter((t) => !t.completed);
+  const done = tasks.filter((t) => t.completed);
+  const rates = await historyRates(req.userId);
+  const ranked = rankTasks(open, { energyLevel, ...rates });
+  res.json({ tasks: [...ranked.map((row) => row.task), ...done] });
 });
 
 // ─── WHAT NEXT ──────────────────────────────────────────────────────
 router.get('/what-next', auth, async (req, res) => {
   const energyLevel = parseInt(req.query.energyLevel || '3', 10);
 
-  const tasks = await Task.find({ userId: req.userId, completed: false });
+  const tasks = await Task.find({ userId: req.userId, completed: false }).lean();
   if (!tasks.length) return res.json({ task: null });
 
-  const completedTasks = await Task.find({ userId: req.userId, completed: true }).limit(50).lean();
-  const totalTasks = await Task.countDocuments({ userId: req.userId });
-  const completionRate = totalTasks > 0 ? completedTasks.length / totalTasks : 0.5;
-  const lateCount = completedTasks.filter((ct) => ct.completedAt && ct.dueAt && new Date(ct.completedAt) > new Date(ct.dueAt)).length;
-  const procRate = completedTasks.length > 0 ? lateCount / completedTasks.length : 0.3;
-
-  const ranked = tasks.map((t) => {
-    const payload = {
-      completion_rate: completionRate,
-      deadline_days: t.dueAt ? (new Date(t.dueAt) - new Date()) / (1000 * 60 * 60 * 24) : 30,
-      estimated_time: t.estimateMins || 30,
-      urgency_self: t.importance || 1,
-      historical_procrastination_rate: procRate,
-      energy_level: energyLevel,
-      dread_score: t.dreadScore || 3,
-      title: t.title,
-    };
-    const result = predictPriority(payload);
-    return { task: t, score: result.score, reason: result.reason, category: result.category };
-  });
-
-  ranked.sort((a, b) => b.score - a.score);
+  const rates = await historyRates(req.userId);
+  const ranked = rankTasks(tasks, { energyLevel, ...rates });
+  await logShown({ userId: req.userId, energyLevel, ranked });
   const top = ranked[0];
 
   res.json({ task: top.task, reason: top.reason, category: top.category });
@@ -91,59 +81,20 @@ router.get('/ai/suggestions', auth, async (req, res) => {
       return res.json({ suggestions: [] });
     }
 
-    const completedTasks = await Task.find({
-      userId: req.userId,
-      completed: true,
-    }).limit(50);
-
-    const completionRate =
-      completedTasks.length > 0
-        ? completedTasks.length / (completedTasks.length + tasks.length)
-        : 0.5;
-
-    const lateCount = completedTasks.filter((ct) => {
-      if (!ct.completedAt || !ct.dueAt) return false;
-      return new Date(ct.completedAt) > new Date(ct.dueAt);
-    }).length;
-
-    const procrastinationRate =
-      completedTasks.length > 0
-        ? lateCount / completedTasks.length
-        : 0.4;
-
     const suggestions = [];
-
     const energyLevel = parseInt(req.query.energyLevel || '3', 10);
+    const rates = await historyRates(req.userId);
+    const rankedRows = rankTasks(tasks, { energyLevel, ...rates });
+    await logShown({ userId: req.userId, energyLevel, ranked: rankedRows });
 
-    const ranked = tasks.map((t) => {
-      const deadlineDays = t.dueAt
-        ? (new Date(t.dueAt) - new Date()) / (1000 * 60 * 60 * 24)
-        : 30;
-
-      const payload = {
-        completion_rate: completionRate,
-        deadline_days: Math.max(deadlineDays, 0),
-        estimated_time: t.estimateMins || 30,
-        urgency_self: t.importance || 1,
-        historical_procrastination_rate: procrastinationRate,
-        energy_level: energyLevel,
-        dread_score: t.dreadScore || 3,
-        title: t.title,
-      };
-
-      const result = predictPriority(payload);
-
-      return {
-        taskId: t._id,
-        title: t.title,
-        priority: result.priority,
-        score: result.score,
-        reason: result.reason,
-        category: result.category,
-      };
-    });
-
-    ranked.sort((a, b) => b.score - a.score);
+    const ranked = rankedRows.map((row) => ({
+      taskId: row.task._id,
+      title: row.task.title,
+      priority: row.priority,
+      score: row.score,
+      reason: row.reason,
+      category: row.category,
+    }));
 
     if (ranked.length > 0) {
       const top = ranked[0];
@@ -187,12 +138,12 @@ router.get('/ai/suggestions', auth, async (req, res) => {
     }
 
     // Procrastination alert
-    if (procrastinationRate > 0.5 && ranked.length > 0) {
+    if (rates.procrastinationRate > 0.5 && ranked.length > 0) {
       suggestions.push({
         id: 'proc_' + Date.now(),
         type: 'nudge',
         title: '⏰ Pattern detected',
-        description: `You complete ${Math.round(procrastinationRate * 100)}% of tasks late. Try the 2-minute rule: if it takes less than 2 minutes, do it now.`,
+        description: `You complete ${Math.round(rates.procrastinationRate * 100)}% of tasks late. Try the 2-minute rule: if it takes less than 2 minutes, do it now.`,
         action: 'none',
       });
     }
@@ -325,6 +276,13 @@ router.put('/:id/complete', auth, async (req, res) => {
 
   if (!task) return res.status(404).json({ error: 'Task not found' });
 
+  await logTaskOutcome({
+    userId: req.userId,
+    type: 'completed',
+    task,
+    energyLevel: req.body?.energyLevel,
+  });
+
   req.app.get('io')?.to(`user:${req.userId}`).emit('task:updated', task);
   res.json({ ok: true });
 });
@@ -356,98 +314,5 @@ router.post('/:id/auto-chunk', auth, aiLimiter, async (req, res) => {
     res.status(500).json({ error: "AI failed" });
   }
 });
-// ─── AI SUGGESTIONS (UPDATED WITH LOCAL ML) ─────────────────────────
-router.get('/ai/suggestions', auth, async (req, res) => {
-  try {
-    const tasks = await Task.find({
-      userId: req.userId,
-      completed: false,
-    }).sort({ dueAt: 1 });
-
-    if (tasks.length === 0) {
-      return res.json({ suggestions: [] });
-    }
-
-    // ── USER HISTORY ────────────────────────────────────────────────
-    const completedTasks = await Task.find({
-      userId: req.userId,
-      completed: true,
-    }).limit(50);
-
-    const completionRate =
-      completedTasks.length > 0
-        ? completedTasks.length / (completedTasks.length + tasks.length)
-        : 0.5;
-
-    const lateCount = completedTasks.filter((ct) => {
-      if (!ct.completedAt || !ct.dueAt) return false;
-      return new Date(ct.completedAt) > new Date(ct.dueAt);
-    }).length;
-
-    const procrastinationRate =
-      completedTasks.length > 0
-        ? lateCount / completedTasks.length
-        : 0.4;
-
-    const suggestions = [];
-
-    // ── LOCAL ML PRIORITY ───────────────────────────────────────────
-    const ranked = tasks.map((t) => {
-      const deadlineDays = t.dueAt
-        ? (new Date(t.dueAt) - new Date()) / (1000 * 60 * 60 * 24)
-        : 30;
-
-      const payload = {
-        completion_rate: completionRate,
-        deadline_days: Math.max(deadlineDays, 0),
-        estimated_time: t.estimateMins || 30,
-        urgency_self: t.importance || 1,
-        historical_procrastination_rate: procrastinationRate,
-      };
-
-      const result = predictPriority(payload);
-
-      return {
-        taskId: t._id,
-        title: t.title,
-        priority: result.priority,
-        score: result.score,
-      };
-    });
-
-    ranked.sort((a, b) => b.score - a.score);
-
-    if (ranked.length > 0) {
-      suggestions.push({
-        id: 'priority_' + Date.now(),
-        type: 'priority',
-        title: `🎯 Start with "${ranked[0].title}"`,
-        description:
-          'This task fits your current situation and should be your top priority.',
-        taskId: ranked[0].taskId,
-        action: 'prioritize',
-      });
-    }
-
-    // ── QUICK WIN ───────────────────────────────────────────────────
-    const quickTask = tasks.find((t) => (t.estimateMins || 30) <= 15);
-    if (quickTask) {
-      suggestions.push({
-        id: 'quick_' + Date.now(),
-        type: 'quick-win',
-        title: `⚡ Quick win: "${quickTask.title}"`,
-        description: 'Finish this quickly to build momentum.',
-        taskId: quickTask._id,
-        action: 'complete',
-      });
-    }
-
-    res.json({ suggestions });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to generate suggestions' });
-  }
-});
-
 
 module.exports = router;
