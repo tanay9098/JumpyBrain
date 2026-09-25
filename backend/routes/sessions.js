@@ -1,7 +1,10 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 const Session = require('../models/Session');
 const DistractionEvent = require('../models/DistractionEvent');
+const Task = require('../models/Task');
+const { logSessionEnded } = require('../services/recommendationLog');
 const jwt = require('jsonwebtoken');
 
 function auth(req, res, next) {
@@ -18,7 +21,7 @@ function auth(req, res, next) {
 
 // POST /api/sessions — log a completed focus session
 router.post('/', auth, async (req, res) => {
-  const { type, subject, durationMins, distractionCount, energyLevel } = req.body;
+  const { type, subject, durationMins, distractionCount, energyLevel, taskId } = req.body;
 
   const session = await Session.create({
     userId: req.userId,
@@ -26,6 +29,19 @@ router.post('/', auth, async (req, res) => {
     subject,
     durationMins,
     completedAt: new Date(),
+  });
+
+  let task = null;
+  if (taskId && mongoose.isValidObjectId(taskId)) {
+    task = await Task.findOne({ _id: taskId, userId: req.userId }).lean();
+  }
+  await logSessionEnded({
+    userId: req.userId,
+    energyLevel,
+    task,
+    plannedMins: durationMins,
+    actualMins: durationMins,
+    distractionCount,
   });
 
   // Persist distraction data if provided

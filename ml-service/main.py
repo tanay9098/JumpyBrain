@@ -305,17 +305,9 @@ def recommend(req: RecommendRequest):
             "avg_distraction_count": req.history.avg_distraction_count or 0.0,
         }
 
-    completed_tasks = (req.history.completed_tasks if req.history else []) or []
-    has_enough_history = len(completed_tasks) >= 10
-
-    user_model = user_models.get(req.userId) if req.userId else None
-    # Lazy retrain: models live in memory only, so after a restart rebuild the
-    # user's model on the fly from the history included in the request.
-    if user_model is None and req.userId and has_enough_history:
-        user_model = train_model_from_tasks(completed_tasks)
-        if user_model is not None:
-            user_models[req.userId] = user_model
-
+    # Task order stays on the rule heuristic. A per-user forest is not fit
+    # from a handful of completed tasks; future training should use the
+    # recommendation event log once that record is large enough.
     scored = []
     for task in req.tasks:
         deadline_days = 30
@@ -335,13 +327,7 @@ def recommend(req: RecommendRequest):
             "importance": task.importance or 1,
         }
 
-        if user_model and has_enough_history:
-            features = build_feature_vector(task_dict, ctx, history_dict)
-            score = float(user_model.predict([features])[0])
-            score = max(0.0, min(1.0, score))
-            _, reason, category = compute_heuristic_score(task_dict, ctx, history_dict)
-        else:
-            score, reason, category = compute_heuristic_score(task_dict, ctx, history_dict)
+        score, reason, category = compute_heuristic_score(task_dict, ctx, history_dict)
 
         priority = "High" if score > 0.65 else ("Low" if score < 0.35 else "Medium")
         scored.append({
@@ -354,7 +340,7 @@ def recommend(req: RecommendRequest):
         })
 
     scored.sort(key=lambda x: x["score"], reverse=True)
-    return {"tasks": scored, "model_used": "personalized" if (user_model and has_enough_history) else "heuristic"}
+    return {"tasks": scored, "model_used": "heuristic"}
 
 
 @app.post("/train-user")

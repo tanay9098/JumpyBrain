@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import api from "../services/api";
 import { useUser } from "../contexts/UserContext";
 import { useEnergy } from "../contexts/EnergyContext";
@@ -27,6 +27,7 @@ function FeedbackCTACard() {
 export default function Home() {
   const { user } = useUser();
   const { energy } = useEnergy();
+  const navigate = useNavigate();
   const { rules: shieldRules, loading: shieldLoading, setRules: setShieldRules, setLoading: setShieldLoading } = useBlockingStore();
   const [daily, setDaily] = useState({ tasksCompleted: 0, totalSessionMins: 0 });
   const [whatNext, setWhatNext] = useState(null);
@@ -89,6 +90,28 @@ export default function Home() {
     }
   }
 
+  async function logRecommendation(type, taskId) {
+    try {
+      await api.post("/recommendation-events", {
+        type,
+        taskId,
+        energyLevel: energy,
+        wasRecommended: true,
+      });
+    } catch {}
+  }
+
+  async function startRecommended() {
+    if (whatNext?._id) await logRecommendation("started", whatNext._id);
+    navigate("/focus", { state: { taskId: whatNext?._id } });
+  }
+
+  async function skipRecommended() {
+    if (!whatNext?._id) return;
+    await logRecommendation("skipped", whatNext._id);
+    loadWhatNext();
+  }
+
   function whatNextReason(task) {
     if (!task) return "";
     const parts = [];
@@ -130,9 +153,10 @@ export default function Home() {
                 <div className="what-next-task">{whatNext.title}</div>
                 <div className="what-next-reason">{whatNextReason(whatNext)}</div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <Link to="/focus">
-                    <button className="btn btn-primary">▶ Start Focus</button>
-                  </Link>
+                  <button className="btn btn-primary" onClick={startRecommended}>▶ Start Focus</button>
+                  <button className="btn btn-ghost btn-sm" style={{ alignSelf: "center" }} onClick={skipRecommended}>
+                    Not now
+                  </button>
                   <Link to="/todo">
                     <button className="btn btn-ghost btn-sm" style={{ alignSelf: "center" }}>
                       View all tasks

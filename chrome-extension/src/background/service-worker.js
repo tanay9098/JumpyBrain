@@ -372,7 +372,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 });
 
 async function logSessionToBackend(state) {
-  const { authToken, apiUrl } = await chrome.storage.local.get(['authToken', 'apiUrl']);
+  const { authToken, apiUrl, bbEnergy } = await chrome.storage.local.get(['authToken', 'apiUrl', 'bbEnergy']);
   if (!authToken || !apiUrl) return;
 
   await fetch(`${apiUrl}/sessions`, {
@@ -382,6 +382,8 @@ async function logSessionToBackend(state) {
       type: state.mode || 'pomodoro',
       durationMins: state.workMins,
       distractionCount: state.distractionCount || 0,
+      energyLevel: bbEnergy || undefined,
+      taskId: state.taskId || undefined,
     }),
   });
 }

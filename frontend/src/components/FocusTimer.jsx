@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import api from "../services/api";
 import { setFocusActive, getDistractionCount, resetDistractionCount } from "./FocusOverlay";
 import Affirmations from "./Affirmations";
@@ -13,6 +14,7 @@ const MODES = [
 ];
 
 export default function FocusTimer() {
+  const location = useLocation();
   const { rules: shieldRules, loading: shieldLoading, setRules: setShieldRules, setLoading: setShieldLoading } = useBlockingStore();
   const [modeIdx, setModeIdx] = useState(0);
   const [workMins, setWorkMins] = useState(25);
@@ -38,6 +40,10 @@ export default function FocusTimer() {
   const linkedTask = tasks.find((t) => t._id === linkedTaskId) || null;
 
   useEffect(() => { loadTasks(); }, []);
+
+  useEffect(() => {
+    if (location.state?.taskId) setLinkedTaskId(location.state.taskId);
+  }, [location.state]);
 
   useEffect(() => {
     setShieldLoading(true);

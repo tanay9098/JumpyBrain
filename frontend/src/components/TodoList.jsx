@@ -166,7 +166,7 @@ export default function TodoList() {
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [dismissedIds, setDismissedIds] = useState(new Set());
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [energy]);
 
   useEffect(() => {
     tasks.forEach((task) => {
@@ -182,7 +182,7 @@ export default function TodoList() {
 
   async function load() {
     try {
-      const res = await api.get("/tasks");
+      const res = await api.get(`/tasks?energyLevel=${energy}`);
       setTasks((res.tasks || []).filter((t) => !t.completed));
     } catch { setTasks([]); }
   }
@@ -233,7 +233,7 @@ export default function TodoList() {
     showReward("✅");
     setTimeout(async () => {
       try {
-        await api.put(`/tasks/${id}/complete`, {});
+        await api.put(`/tasks/${id}/complete`, { energyLevel: energy });
         clearDeadline(id);
         notify("✅ Task completed", "Well done. One less thing to worry about.");
         load();
@@ -291,6 +291,12 @@ export default function TodoList() {
       window.location.href = "/mindful";
       return;
     } else if (s.action === "prioritize" && s.taskId) {
+      api.post("/recommendation-events", {
+        type: "started",
+        taskId: s.taskId,
+        energyLevel: energy,
+        wasRecommended: true,
+      }).catch(() => {});
       document.getElementById(`task-${s.taskId}`)?.scrollIntoView({ behavior: "smooth" });
     }
     setSuggestions((p) => p.filter((x) => x.id !== s.id));
@@ -317,19 +323,7 @@ export default function TodoList() {
     return dt.toLocaleDateString();
   }
 
-  function scoreTask(t) {
-    const now = new Date();
-    const hoursLeft = t.dueAt ? (new Date(t.dueAt) - now) / 3600000 : 168;
-    const urgency = t.dueAt ? Math.exp(-Math.max(hoursLeft, 0) / 48) + 0.1 : 0.1;
-    const taskDiff = Math.min((t.estimateMins || 30) / 120, 1);
-    const userE = energy / 5;
-    const energyMatch = 1 - Math.abs(taskDiff - userE) * 0.5;
-    const dreadInverse = 1 - ((t.dreadScore || 3) - 1) / 8;
-    const timeFit = (t.estimateMins || 30) <= 45 ? 1.2 : 0.9;
-    return urgency * energyMatch * dreadInverse * timeFit;
-  }
-
-  const sortedTasks = [...tasks].sort((a, b) => scoreTask(b) - scoreTask(a));
+  const sortedTasks = tasks;
 
   return (
     <div>
