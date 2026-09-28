@@ -1,6 +1,6 @@
 # JumpyBrain — Focus better. Do more. Feel calm.
 
-JumpyBrain is a productivity application built specifically for people with ADHD/ADD. It combines smart task management, focus tools, mindfulness exercises, and AI-powered recommendations to help you stay on track — without overwhelming you.
+JumpyBrain is a productivity application built specifically for people with ADHD/ADD. It combines smart task management, focus tools, mindfulness exercises, and rule-based task ranking to help you stay on track — without overwhelming you. OpenAI is used to draft tasks from a brain dump, not to choose what you do next.
 
 ---
 
@@ -51,7 +51,9 @@ It is not just another to-do list. JumpyBrain actively:
 | **Calendar** | Visual schedule pulled from your tasks and Google Calendar |
 | **Progress Dashboard** | Weekly and monthly charts showing tasks completed and time focused |
 | **Mindfulness** | Guided breathing and body-scan audio exercises |
-| **AI Recommendations** | OpenAI-powered suggestions for which task to tackle next |
+| **What next** | Picks one task with fixed rules that use your energy, the deadline, importance, and dread. This is not an OpenAI call |
+| **Recommendation log** | Saves what was shown and whether you started, skipped, finished, or ended a focus session on it, for a later recommender |
+| **AI task drafting** | OpenAI turns a brain dump into tasks and splits a task into steps. It does not choose what to do next |
 | **Energy Control** | Rate your current energy (1–5) to get appropriately scoped task suggestions |
 | **Connectors** | Connect Gmail, Slack, and Google Calendar to sync tasks automatically |
 | **Chrome Extension** | Quick-add tasks, start timers, and get your next task without switching tabs |
@@ -83,11 +85,11 @@ Setting this helps JumpyBrain recommend tasks that match how you feel right now.
 
 ### Step 3 — Add your tasks
 
-Go to the **Tasks** page. Add a task with a title, optional due date, and priority. The AI will help rank them.
+Go to the **Tasks** page. Add a task with a title, optional due date, estimate, dread, and importance. With your energy level set, the list is ordered by the same rules as What next.
 
 ### Step 4 — Let JumpyBrain pick what's next
 
-On the **Today** page, tap **What's Next?** to get an AI recommendation for the single best task to start based on your energy, priorities, and deadlines.
+On the **Today** page, **What next?** shows one task chosen by those rules. **Start Focus** records that you started it and opens the timer with that task linked. **Not now** records a skip and asks for another task.
 
 ### Step 5 — Use the Focus Timer
 
@@ -111,7 +113,7 @@ The **Progress** page shows bar and line charts of your weekly and monthly perfo
 
 Install the extension in Chrome and pin it to your toolbar. From any website you can:
 
-- See your next recommended task
+- See your next recommended task, mark it started, skip it, or mark it done
 - Quick-add a new task
 - Start or stop a focus timer
 - Do a Brain Dump (capture thoughts without leaving the page)
@@ -129,10 +131,10 @@ The native mobile app (built with Capacitor) adds app-level blocking on top of e
 JumpyBrain/
 ├── backend/              # Node.js / Express API server
 │   ├── jobs/             # Cron jobs (deadline checker, integration sync)
-│   ├── ml/               # Priority scoring model
-│   ├── models/           # Mongoose data models (Task, Habit, BlockingRule, ...)
-│   ├── routes/           # REST API route handlers (tasks, habits, blocking, ...)
-│   ├── services/         # Gmail, Slack, Google Calendar integrations
+│   ├── ml/               # Rule-based priority scoring (priorityModel.js)
+│   ├── models/           # Mongoose models (Task, RecommendationEvent, Habit, BlockingRule, ...)
+│   ├── routes/           # REST handlers (tasks, recommendation-events, priority, habits, blocking, ...)
+│   ├── services/         # recommendationLog, plus Gmail, Slack, and Google Calendar
 │   ├── utils/            # Email sender, web push helpers
 │   ├── server.js         # Entry point
 │   └── .env.example      # Environment variable template
@@ -205,12 +207,11 @@ JumpyBrain/
 - **Android (Kotlin)** — `UsageStatsManager` (foreground-app polling) + `AccessibilityService` (instant app-launch detection) to block apps
 - **iOS (Swift)** — `FamilyControls` + `ManagedSettings` to shield apps and filter web content at the OS level
 
-### ML Service
-- **Python + FastAPI** — standalone microservice (`ml-service/`) exposing the priority-scoring model over HTTP
-- **scikit-learn + NumPy** — model training/inference
-- **Pydantic** — request/response validation
-- **Uvicorn** — ASGI server
-- Called by the backend via the `ML_PRIORITY_URL` environment variable (see [`backend/routes/priority.js`](./backend/routes/priority.js)); a separate lightweight JS fallback model lives in `backend/ml/priorityModel.js`
+### Task ranking and the ML service
+- **Live ranker** — `backend/ml/priorityModel.js`. What next, the task list (`GET /api/tasks?energyLevel=`), suggestions, and `POST /api/priority/prioritize` all use these rules: deadline, importance, dread, energy, time of day, and a keyword category.
+- **Recommendation log** — `RecommendationEvent` records `shown`, `started`, `completed`, `skipped`, and `session_ended`, each with energy and a snapshot of the task. `backend/services/recommendationLog.js` writes them. `POST /api/recommendation-events` accepts `started` and `skipped` from the clients.
+- **Training is paused** — `POST /api/priority/train` does not fit a model. A per-user forest waits until this log is the training source.
+- **Python + FastAPI** (`ml-service/`) — `/recommend` returns the same heuristic. scikit-learn and NumPy remain in the file for the unused per-user trainer. The Node API does not call `ML_PRIORITY_URL` to order tasks.
 
 ### Infrastructure
 - **Frontend** → Vercel
@@ -275,7 +276,7 @@ cp backend/.env.example backend/.env
 | `OPENAI_API_KEY` | OpenAI API key |
 | `SLACK_CLIENT_ID` | Slack app client ID |
 | `SLACK_CLIENT_SECRET` | Slack app client secret |
-| `ML_PRIORITY_URL` | URL of the ML priority microservice |
+| `ML_PRIORITY_URL` | Optional URL of the FastAPI service. Task order does not use it; ranking lives in `backend/ml/priorityModel.js` |
 | `VAPID_PUBLIC_KEY` | VAPID public key for web push notifications |
 | `VAPID_PRIVATE_KEY` | VAPID private key for web push notifications |
 | `VAPID_EMAIL` | `mailto:` address sent with VAPID requests |
@@ -402,11 +403,13 @@ All routes are prefixed with `/api`.
 | `POST /api/auth/register` | Register a new user |
 | `POST /api/auth/login` | Email/password login |
 | `POST /api/auth/google` | Google OAuth login |
-| `GET /api/tasks` | List all tasks for the authenticated user |
+| `GET /api/tasks` | List tasks. `?energyLevel=1-5` sorts open tasks with the heuristic |
 | `POST /api/tasks` | Create a task |
-| `GET /api/tasks/what-next` | AI recommendation for the next task |
+| `GET /api/tasks/what-next` | Next task from the heuristic; writes a `shown` event |
+| `PUT /api/tasks/:id/complete` | Mark a task complete. Body `energyLevel` is stored on a `completed` event |
+| `POST /api/recommendation-events` | Client log for `started` or `skipped` (`taskId`, `energyLevel`) |
 | `GET /api/sessions` | List focus sessions |
-| `POST /api/sessions` | Start / end a focus session |
+| `POST /api/sessions` | Log a focus session. Optional `taskId` and `energyLevel` are stored on `session_ended` |
 | `GET /api/stats/daily` | Today's task and session summary |
 | `GET /api/stats/weekly` | Last 7 days of activity |
 | `GET /api/stats/monthly` | Last 30 days of activity |
@@ -417,7 +420,8 @@ All routes are prefixed with `/api`.
 | `GET /api/recommendations/mindfulness` | Mindfulness suggestion by energy level |
 | `POST /api/integrations/connect` | Connect Gmail / Slack / Google Calendar |
 | `POST /api/push/subscribe` | Register for browser push notifications |
-| `GET /api/priority` | Priority score for tasks (ML model) |
+| `POST /api/priority/prioritize` | Rank open tasks with the heuristic and write a `shown` event |
+| `POST /api/priority/train` | Paused. Returns skipped until recommendation events are the training source |
 | `POST /api/ai/stream` | Streaming AI chat response |
 
 Authentication uses **Bearer JWT** tokens. Pass `Authorization: Bearer <token>` on every protected request.
@@ -439,7 +443,7 @@ Authentication uses **Bearer JWT** tokens. Pass `Authorization: Bearer <token>` 
 1. Create a second Render Web Service in the same Render project as the backend.
 2. Set the **Root Directory** to `ml-service/` (or whichever directory contains the ML server).
 3. Set **Runtime** to Docker or Node depending on the ML service setup.
-4. Copy the public URL of this service and add it as `ML_PRIORITY_URL` in the backend service's Environment tab.
+4. `ML_PRIORITY_URL` does not drive task order. The backend ranks with `backend/ml/priorityModel.js`. Deploy this service only if you still want the FastAPI process available; `/recommend` returns the same rules, and per-user training stays paused.
 
 ### Frontend (Vercel)
 
