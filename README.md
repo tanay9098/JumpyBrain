@@ -1,6 +1,6 @@
 # JumpyBrain — Focus better. Do more. Feel calm.
 
-JumpyBrain is a productivity application built specifically for people with ADHD/ADD. It combines smart task management, focus tools, mindfulness exercises, and AI-powered recommendations to help you stay on track — without overwhelming you.
+JumpyBrain is a productivity application built specifically for people with ADHD/ADD. It combines smart task management, focus tools, mindfulness exercises, and rule-based task ranking to help you stay on track — without overwhelming you. OpenAI is used to draft tasks from a brain dump, not to choose what you do next.
 
 ---
 
